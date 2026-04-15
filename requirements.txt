@@ -18,7 +18,6 @@ pydantic==2.13.0
 pydantic-settings==2.13.1
 pydantic_core==2.46.0
 python-dotenv==1.2.2
-SQLAlchemy==2.0.35
 uuid6==2024.7.10
 PyYAML==6.0.3
 SQLAlchemy==2.0.49
