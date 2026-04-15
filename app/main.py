@@ -3,7 +3,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from fastapi.encoders import jsonable_encoder
 
 from uuid6 import uuid7
 from . import models, schemas, services, database
@@ -23,9 +22,11 @@ app.add_middleware(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    # Spec requires status field to be the string "502" for 502 errors
+    status_val = str(exc.status_code) if exc.status_code == 502 else "error"
     return JSONResponse(
         status_code=exc.status_code,
-        content={"status": "error", "message": str(exc.detail)},
+        content={"status": status_val, "message": str(exc.detail)},
     )
 
 @app.exception_handler(RequestValidationError)
@@ -35,19 +36,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     message = "Invalid type"
 
     for error in errors:
+        error_msg = error.get("msg", "")
         error_type = error.get("type", "")
         error_loc = error.get("loc", [])
-        error_msg = error.get("msg", "")
 
-        if error_loc and error_loc[-1] == "name":
-            if error_type == "value_error.missing" or error_msg == "Missing or empty name":
-                status_code = 400
-                message = "Missing or empty name"
-                break
-            if error_type.startswith("value_error.any_str.min_length"):
-                status_code = 400
-                message = "Missing or empty name"
-                break
+        # Missing name field entirely
+        if error_type == "missing" and error_loc and error_loc[-1] == "name":
+            status_code = 400
+            message = "Missing or empty name"
+            break
+
+        # Our custom validator raised "Missing or empty name"
+        if "Missing or empty name" in error_msg:
+            status_code = 400
+            message = "Missing or empty name"
+            break
+
+        # "Invalid type" stays 422 (our custom validator raises this for non-strings)
 
     return JSONResponse(
         status_code=status_code,
@@ -62,30 +67,46 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 
-@app.post("/api/profiles", status_code=201, response_model=schemas.SuccessResponse)
+def _serialize_profile(profile: models.Profile) -> dict:
+    """Serialize a profile model to a dict with consistent ISO 8601 UTC timestamp."""
+    created_at = profile.created_at
+    # Ensure UTC ISO 8601 format: 2026-04-01T12:00:00Z
+    if created_at is not None:
+        ts = created_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        ts = None
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "gender": profile.gender,
+        "gender_probability": round(float(profile.gender_probability), 2),
+        "sample_size": profile.sample_size,
+        "age": profile.age,
+        "age_group": profile.age_group,
+        "country_id": profile.country_id,
+        "country_probability": round(float(profile.country_probability), 2),
+        "created_at": ts,
+    }
+
+
+@app.post("/api/profiles", status_code=201)
 async def create_profile(request: schemas.ProfileCreate, db: Session = Depends(database.get_db)):
     name_clean = request.name.lower().strip()
 
-    # Check for existing profile
+    # Check for existing profile (idempotency)
     existing = db.query(models.Profile).filter(models.Profile.name == name_clean).first()
-    
+
     if existing:
-        # Convert SQLAlchemy model to Pydantic, then to a JSON-compatible dict
-        pydantic_data = schemas.ProfileResponse.model_validate(existing)
-        
-        # jsonable_encoder handles the datetime/UUID serialization issue
-        safe_data = jsonable_encoder(pydantic_data)
-        
         return JSONResponse(
-            status_code=200, 
+            status_code=200,
             content={
-                "status": "success", 
-                "message": "Profile already exists", 
-                "data": safe_data
-            }
+                "status": "success",
+                "message": "Profile already exists",
+                "data": _serialize_profile(existing),
+            },
         )
 
-    # If no existing profile, proceed with creation
+    # Fetch from external APIs
     intel = await services.get_profile_intelligence(name_clean)
 
     new_profile = models.Profile(
@@ -97,13 +118,16 @@ async def create_profile(request: schemas.ProfileCreate, db: Session = Depends(d
     db.commit()
     db.refresh(new_profile)
 
-    # FastAPI's response_model handles the serialization automatically for the 201 return
-    return {
-        "status": "success", 
-        "data": schemas.ProfileResponse.model_validate(new_profile)
-    }
+    return JSONResponse(
+        status_code=201,
+        content={
+            "status": "success",
+            "data": _serialize_profile(new_profile),
+        },
+    )
 
-@app.get("/api/profiles", response_model=schemas.ListResponse)
+
+@app.get("/api/profiles")
 def get_profiles(
     gender: str = None,
     country_id: str = None,
@@ -119,18 +143,33 @@ def get_profiles(
         query = query.filter(models.Profile.age_group == age_group.lower())
 
     results = query.all()
-    return {
-        "status": "success",
-        "count": len(results),
-        "data": [schemas.ProfileListItem.from_orm(profile) for profile in results],
-    }
+    data = [
+        {
+            "id": p.id,
+            "name": p.name,
+            "gender": p.gender,
+            "age": p.age,
+            "age_group": p.age_group,
+            "country_id": p.country_id,
+        }
+        for p in results
+    ]
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "count": len(data), "data": data},
+    )
 
-@app.get("/api/profiles/{profile_id}", response_model=schemas.SuccessResponse)
+
+@app.get("/api/profiles/{profile_id}")
 def get_single_profile(profile_id: str, db: Session = Depends(database.get_db)):
     profile = db.query(models.Profile).filter(models.Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    return {"status": "success", "data": schemas.ProfileResponse.from_orm(profile)}
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "data": _serialize_profile(profile)},
+    )
+
 
 @app.delete("/api/profiles/{profile_id}", status_code=204)
 def delete_profile(profile_id: str, db: Session = Depends(database.get_db)):
