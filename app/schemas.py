@@ -1,9 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1)
+
+    @field_validator("name", mode="before")
+    def strip_name(cls, value: Any) -> str:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                raise ValueError("Missing or empty name")
+            return cleaned
+        return value
 
 class ProfileResponse(BaseModel):
     id: str
@@ -17,16 +26,43 @@ class ProfileResponse(BaseModel):
     country_probability: float
     created_at: datetime
 
-    # This allows Pydantic to populate the model from ORM objects directly
-    class Config:
-        from_attributes = True 
+    @field_validator("gender_probability", "country_probability")
+    def round_floats(cls, value: Any) -> float:
+        return round(float(value), 2)
+
+    model_config = {
+        "from_attributes": True,
+        "json_encoders": {
+            datetime: lambda v: v.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    }
+
+class ProfileListItem(BaseModel):
+    id: str
+    name: str
+    gender: str
+    age: int
+    age_group: str
+    country_id: str
+
+    model_config = {
+        "from_attributes": True,
+    }
 
 class SuccessResponse(BaseModel):
     status: str = "success"
-    message: Optional[str] = None
+    message: Optional[str] = Field(default=None, exclude_none=True)
     data: ProfileResponse
+
+    model_config = {
+        "from_attributes": True,
+    }
 
 class ListResponse(BaseModel):
     status: str = "success"
     count: int
-    data: List[ProfileResponse]
+    data: List[ProfileListItem]
+
+    model_config = {
+        "from_attributes": True,
+    }
