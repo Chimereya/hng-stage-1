@@ -3,6 +3,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from fastapi.encoders import jsonable_encoder
+
 from uuid6 import uuid7
 from . import models, schemas, services, database
 
@@ -59,21 +61,31 @@ async def general_exception_handler(request: Request, exc: Exception):
         content={"status": "error", "message": "Internal server error"},
     )
 
+
 @app.post("/api/profiles", status_code=201, response_model=schemas.SuccessResponse)
 async def create_profile(request: schemas.ProfileCreate, db: Session = Depends(database.get_db)):
     name_clean = request.name.lower().strip()
 
+    # Check for existing profile
     existing = db.query(models.Profile).filter(models.Profile.name == name_clean).first()
+    
     if existing:
+        # Convert SQLAlchemy model to Pydantic, then to a JSON-compatible dict
+        pydantic_data = schemas.ProfileResponse.model_validate(existing)
+        
+        # jsonable_encoder handles the datetime/UUID serialization issue
+        safe_data = jsonable_encoder(pydantic_data)
+        
         return JSONResponse(
-            status_code=200,
+            status_code=200, 
             content={
-                "status": "success",
-                "message": "Profile already exists",
-                "data": schemas.ProfileResponse.from_orm(existing).model_dump(),
-            },
+                "status": "success", 
+                "message": "Profile already exists", 
+                "data": safe_data
+            }
         )
 
+    # If no existing profile, proceed with creation
     intel = await services.get_profile_intelligence(name_clean)
 
     new_profile = models.Profile(
@@ -85,7 +97,11 @@ async def create_profile(request: schemas.ProfileCreate, db: Session = Depends(d
     db.commit()
     db.refresh(new_profile)
 
-    return {"status": "success", "data": schemas.ProfileResponse.from_orm(new_profile)}
+    # FastAPI's response_model handles the serialization automatically for the 201 return
+    return {
+        "status": "success", 
+        "data": schemas.ProfileResponse.model_validate(new_profile)
+    }
 
 @app.get("/api/profiles", response_model=schemas.ListResponse)
 def get_profiles(
