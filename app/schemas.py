@@ -3,16 +3,17 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 class ProfileCreate(BaseModel):
-    name: str = Field(..., min_length=1)
-
+    name: Any  # Accept anything, validate below for correct 400 vs 422 split
+ 
     @field_validator("name", mode="before")
-    def strip_name(cls, value: Any) -> str:
-        if isinstance(value, str):
-            cleaned = value.strip()
-            if not cleaned:
-                raise ValueError("Missing or empty name")
-            return cleaned
-        return value
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Invalid type")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Missing or empty name")
+        return cleaned
 
 class ProfileResponse(BaseModel):
     id: str
