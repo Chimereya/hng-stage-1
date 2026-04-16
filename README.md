@@ -88,6 +88,11 @@ Query Parameters
 
 ### 3. Get Single Profile
 GET /api/profiles/{profile_id}
+
+#### Example Request
+/api/profiles/018ed47a-6f1a-7b3e-9d2c-1a2b3c4d5e6f
+
+
 ##  Success Response
 
 ```json
