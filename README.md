@@ -34,12 +34,6 @@ It processes names to fetch demographic insights (gender, age, nationality) and 
 ### 1. Create Profile
 **POST** `/api/profiles`
 
-#### Request Body
-```json
-{
-  "name": "ella"
-}
-
 #### Query Parameters
 - `name` (string, required)
 
